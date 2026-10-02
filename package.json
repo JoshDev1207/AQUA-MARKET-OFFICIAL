@@ -1,0 +1,39 @@
+{
+  "name": "aquamarket",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AquaMarket \u2014 Supabase marketplace with Socket.IO chat and Cloudinary uploads",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "npm run build && node --watch server/index.js",
+    "build": "node scripts/build.js",
+    "start": "node server/index.js",
+    "test": "node --test tests/*.test.js",
+    "check": "node scripts/check.js",
+    "admin": "node scripts/make-admin.js",
+    "test:redis": "node scripts/test-redis.js"
+  },
+  "dependencies": {
+    "@socket.io/redis-streams-adapter": "^0.3.1",
+    "@supabase/supabase-js": "^2.58.0",
+    "cloudinary": "^2.7.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "file-type": "^21.0.0",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.2",
+    "rate-limit-redis": "^6.0.1",
+    "redis": "^6.3.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.10",
+    "esbuild": "^0.25.10"
+  }
+}

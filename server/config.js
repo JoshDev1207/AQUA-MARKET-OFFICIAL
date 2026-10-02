@@ -1,0 +1,10 @@
+import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
+import { v2 as cloudinary } from 'cloudinary';
+import { readConfig } from './environment.js';
+export const config = readConfig();
+export const clientOptions={auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}};
+export const db=config.dbReady?createClient(config.supabaseUrl,config.serviceKey,clientOptions):null;
+export const authClient=()=>createClient(config.supabaseUrl,config.publicKey,clientOptions);
+cloudinary.config({cloud_name:config.cloudName,api_key:config.cloudKey,api_secret:config.cloudSecret,secure:true});
+export { cloudinary };

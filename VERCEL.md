@@ -1,0 +1,162 @@
+# Deploy AquaMarket 2.1 on Vercel
+
+This package includes the Vercel container entry point, shared Socket.IO delivery through Redis, email verification codes, and admin analytics with optional Groq recommendations. You still need to configure your own provider accounts. No private credentials or sample marketplace records are included.
+
+## 1. Update the project and database
+
+Extract the ZIP and copy its `AquaMarket` contents into your existing project folder. Keep your private local `.env` values, and add the new variables from the examples. Commit and push the updated files to your existing GitHub repository. `Dockerfile.vercel`, `package.json`, and `package-lock.json` must be in the selected project root.
+
+For an **existing AquaMarket database**, run only `supabase/migrations/002_admin_analytics.sql` in the Supabase SQL Editor. This adds an index and the admin analytics function; it does not delete data or create sample records. The upgrade can be re-run safely.
+
+For a **new empty database**, run `001_aquamarket.sql` first, then `002_admin_analytics.sql`. Do not run migration 001 again on your existing database. With Supabase CLI, apply pending migrations through `supabase db push` instead of also running them manually.
+
+## 2. Connect Redis for chat across instances
+
+Create a Redis database using a provider that supports Redis TCP/TLS, Streams, Pub/Sub and Lua scripts, such as Upstash Redis or Redis Cloud. Put it near your Vercel region and Supabase project where possible.
+
+Copy the provider's **Redis connection string** (Node.js/Redis client connection tab). It should look like:
+
+```dotenv
+REDIS_URL=rediss://default:YOUR_PASSWORD@YOUR_REDIS_HOST:6379
+REDIS_PREFIX=aquamarket:production
+```
+
+Use the actual host, port and URL-encoded password from the provider. An HTTPS REST endpoint, `UPSTASH_REDIS_REST_URL`, or REST token will not work with the Socket.IO adapter. A Marketplace integration may initially provide only REST variables; add `REDIS_URL` manually from the provider's console.
+
+All production instances and redeployments must use the same Redis database and prefix. Give a separate preview/test environment its own Supabase database, Redis prefix and credentials. Do not use test scripts against production Redis.
+
+Redis coordinates message delivery, account-room disconnects, rate limits and the 15-minute AI cache. Supabase stores the durable conversations/messages. Socket.IO uses WebSockets only and reconnects after Vercel closes an invocation. The browser reloads saved messages on reconnect. No sticky-session configuration is needed with this transport.
+
+Redis service quotas and Vercel usage limits still apply. The app does not require a paid plan automatically, but no unlimited free hosting claim is made.
+
+## 3. Enable email verification codes
+
+Use **Supabase Auth + Resend SMTP**. The Node app asks Supabase to register, resend and verify; Supabase generates the six-digit code and sends the email through SMTP. Vercel does not need a mail server or a Resend SDK/API key.
+
+1. In Supabase Authentication, enable the Email provider and keep **Confirm email** enabled.
+2. Create a [Resend account](https://resend.com) and verify a sending domain you own by adding its DNS records. A `vercel.app` subdomain is suitable for your website, but you cannot verify it as your own sending domain. The website and sending domain may be different.
+3. Create a Resend API key. In Supabase's **Authentication → Email / SMTP settings**, enable custom SMTP and enter:
+
+| Field | Value |
+| --- | --- |
+| Host | `smtp.resend.com` |
+| Port | `465` |
+| Username | `resend` |
+| Password | Your Resend API key |
+| Sender email | A sender on your verified domain, e.g. `accounts@your-domain.com` |
+| Sender name | `AquaMarket` |
+
+4. In Supabase **Email Templates → Confirm sign up**, use subject `Your AquaMarket verification code` and paste the complete contents of `supabase/email-templates/confirm-signup.html`. Its `{{ .Token }}` placeholder is replaced by Supabase with the real code. Keep the default six-digit token length. A 10-minute OTP expiration is a reasonable setting for this flow.
+5. Leave the password-reset template as a reset-link email. Recovery still uses `/reset-password.html`; Google OAuth still uses `/auth-callback.html`.
+6. Review both the Supabase Auth email rate limit and Resend's sending quota. Supabase's default email sender is for testing and cannot serve arbitrary new users reliably. Resend also requires a verified sender/domain for delivery to other people.
+
+Registration opens `/verify-email.html`, with the email address saved only in session storage. An invalid or expired code displays an error. The resend button has a 60-second cooldown, also enforced on the server across instances. Verification attempts are limited by IP and by hashed email address. Supabase enforces expiry and one-time use. Password login remains username/email plus password; this is not an OTP on every login.
+
+No code is generated by the browser, logged by the application, or stored in a marketplace table. Never turn off email confirmation to troubleshoot delivery. Fix SMTP/template settings instead. Users with a pending signup can open the verification page from the login screen and request a new code.
+
+## 4. Connect Groq for admin recommendations
+
+1. Create an API key at [Groq Console](https://console.groq.com/keys).
+2. Add these **server environment variables** in Vercel:
+
+```dotenv
+GROQ_API_KEY=YOUR_GROQ_KEY
+GROQ_MODEL=openai/gpt-oss-20b
+```
+
+The model runs through **Groq's API**; it does not need an OpenAI API key. This default supports strict JSON output. Groq offers a rate-limited free tier; check the [current limits](https://console.groq.com/docs/rate-limits) for your account. If a model becomes unavailable, set a currently supported `GROQ_MODEL` and redeploy. Other models use JSON mode plus server validation.
+
+Open **Administration → Analytics & AI** after logging in as an admin. Choose 7, 30 or 90 days, then select **Generate insights**. Recommendations are generated on request and reused for up to 15 minutes across instances. Concurrent requests for the same report are locked to avoid duplicate provider calls. The endpoint permits three analysis requests per minute across administrators.
+
+The dashboard's figures are calculated in PostgreSQL, independently of AI. Only aggregate numbers, fixed category names and reporting dates are sent to Groq. User names, emails, addresses, messages, product descriptions, tokens and credentials are excluded. Each recommendation shows database metrics as evidence. The model cannot run SQL or change accounts, stock, prices, listings or orders.
+
+Completed paid value means completed paid orders placed in the selected window, based on their current status. It is not platform profit. Category sales use those orders. Stock/application/report counts are current snapshots. The preceding comparison period is the same duration immediately before the selected window. Daily charts use UTC. These are descriptive analytics; no demand prediction or guarantee of future sales is produced.
+
+An empty marketplace displays insufficient data without an AI call. Missing keys, timeouts, invalid model output and usage-limit responses leave the database analytics usable. Recommendations need the admin's review.
+
+## 5. Set Vercel environment variables
+
+You may import `.env.vercel.example` and fill the placeholders. If you already imported the old `.env`, keep your provider values and update/add the following:
+
+| Variable | Production value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `AQUA_HOST` | `vercel` |
+| `PORT` | `3000` |
+| `APP_URL` | Exact production HTTPS origin, e.g. `https://your-project.vercel.app`, no path/trailing slash |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Publishable or legacy anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server secret or legacy service-role key |
+| `CLOUDINARY_CLOUD_NAME` | Cloudinary cloud name |
+| `CLOUDINARY_API_KEY` | Cloudinary API key |
+| `CLOUDINARY_API_SECRET` | Cloudinary API secret |
+| `REDIS_URL` | TLS `rediss://` connection string |
+| `REDIS_PREFIX` | `aquamarket:production` |
+| `GROQ_API_KEY` | Groq API key (needed for AI recommendations only) |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` |
+| `TRUST_PROXY` | `1` (Vercel mode enforces this using Vercel's sanitized client-IP header) |
+
+The Resend key belongs in Supabase SMTP settings. Google Client ID/Secret belong in Supabase's Google provider settings. Do not put secrets in client files, commit your actual `.env`, or prefix server secrets with `PUBLIC_`/`NEXT_PUBLIC_`.
+
+`APP_URL` cannot remain localhost. If it is omitted, Vercel's `VERCEL_PROJECT_PRODUCTION_URL` is used when available. Use an explicit `APP_URL` for a custom domain. Use the production domain to operate the app; unconfigured preview/alternate origins are intentionally rejected for writes and sockets.
+
+## 6. Create or redeploy the Vercel project
+
+| Import screen setting | Value |
+| --- | --- |
+| Root directory | Folder containing `Dockerfile.vercel` and `package.json` (usually `./`) |
+| Application preset | **Container** |
+| Build/output/install overrides | Leave defaults; the Dockerfile runs `npm ci`, builds and starts Node |
+
+Choose **Create Project** (or redeploy the new Git commit). Keep Fluid compute enabled for WebSockets. Vercel currently documents Container Images and WebSockets as beta features.
+
+The container listens on `0.0.0.0:3000`. The project-level `PORT=3000` tells Vercel which port to route to. The Dockerfile uses Node 22 and excludes development packages and private environment files from the runtime image.
+
+Set your production URL in **Supabase → Authentication → URL Configuration**:
+
+- Site URL: `https://YOUR_PRODUCTION_DOMAIN`
+- Redirect URL: `https://YOUR_PRODUCTION_DOMAIN/auth-callback.html`
+- Redirect URL: `https://YOUR_PRODUCTION_DOMAIN/reset-password.html`
+
+Add your production origin to Google's authorized JavaScript origins. Keep Google's authorized redirect URI as `https://YOUR_SUPABASE_PROJECT.supabase.co/auth/v1/callback`. Changing a Vercel environment variable requires a redeployment. If the assigned production domain differs from `APP_URL`, correct it and redeploy.
+
+## 7. Check the deployed application
+
+1. Visit `/healthz`: database/upload configuration should be present and `sharedBackend` should be `redis`, with `sharedBackendReady: true`. This checks configuration presence and the Redis connection, not actual Supabase/Cloudinary delivery.
+2. Register using an inbox you control; receive and enter the code; test resend and an invalid code; sign out and log in with username/password.
+3. Test Google sign-in and password recovery.
+4. If needed, run `npm run admin -- your_username` from a trusted local terminal using the production Supabase credentials in your private `.env`. Open `/admin/analytics.html` and generate insights after adding real marketplace activity.
+5. Use two accounts in different browsers to test chat, typing and read receipts. Refresh/reconnect and confirm saved history returns.
+6. Upload a photo, create a real listing, and test an order. Confirm the checkout remains manual payment.
+
+Image uploads are now limited to **4,000,000 bytes (4 MB)**, below Vercel's 4.5 MB request limit including multipart headers. The browser and server enforce the same limit. The hero video has been compressed below the response limit without changing its dimensions or duration. Large CSV exports ask for a narrower date range.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| Startup reports localhost/HTTPS | Set the exact live `APP_URL`, then redeploy |
+| Startup reports missing Redis | Add a TLS `REDIS_URL`, not a REST URL/token |
+| Redis unavailable / API 503 | Check provider status, connection quota, TLS URL and credentials |
+| Analytics asks for migration 002 | Run only `002_admin_analytics.sql` on the existing database |
+| Email contains a link rather than a code | Replace the **Confirm sign up** template with the included template |
+| Email does not arrive | Check verified Resend domain, Supabase custom SMTP, sending quotas, Auth logs and spam folder |
+| Code invalid/expired | Use the newest code for that email or wait and resend |
+| Groq not connected / model unavailable | Check `GROQ_API_KEY`, model access/name and redeploy |
+| Groq usage limit | Wait for the limit to reset; cached reports remain reusable |
+| Chat origin blocked | Use the domain that exactly matches `APP_URL` |
+| Upload too large | Choose a JPG/PNG/WebP file of at most 4 MB |
+
+## Provider references
+
+- https://vercel.com/docs/functions/container-images
+- https://vercel.com/docs/functions/websockets
+- https://vercel.com/docs/functions/limitations
+- https://vercel.com/docs/headers/request-headers
+- https://socket.io/docs/v4/redis-streams-adapter/
+- https://supabase.com/docs/guides/auth/auth-email-templates
+- https://supabase.com/docs/reference/javascript/auth-verifyotp
+- https://supabase.com/docs/guides/auth/auth-smtp
+- https://resend.com/docs/send-with-supabase-smtp
+- https://console.groq.com/docs/structured-outputs
+- https://console.groq.com/docs/rate-limits
